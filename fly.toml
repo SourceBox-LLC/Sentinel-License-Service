@@ -1,0 +1,47 @@
+# Sentinel License Service — Fly.io app configuration.
+#
+# Much smaller footprint than Command Center: no video/HLS workload,
+# check-in traffic is one small request per self-hosted install every
+# ~15 minutes. Same single-machine/single-volume topology and the same
+# reason for it — SQLite-on-a-volume can't do rolling deploys (a second
+# machine can't attach the same volume) — but the blast radius of a
+# brief deploy-time gap is negligible here: an install that hits a
+# check-in mid-deploy just retries on its next tick.
+
+app = "sentinel-license"
+primary_region = "sjc"
+
+[build]
+
+[env]
+  DATABASE_URL = "sqlite:////data/licenses.db"
+
+[[mounts]]
+  source = "sentinel_license_data"
+  destination = "/data"
+
+[deploy]
+  strategy = "immediate"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  # Always-warm rather than scale-to-zero: the ~15-minute check-in
+  # interval means a cold start would routinely leak into the client's
+  # grace-period math (see Command Center's SENTINEL_LICENSE_GRACE_HOURS).
+  min_machines_running = 1
+  processes = ["app"]
+
+  [[http_service.checks]]
+    grace_period = "15s"
+    interval = "15s"
+    timeout = "5s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 256
