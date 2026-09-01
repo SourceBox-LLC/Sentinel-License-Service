@@ -28,7 +28,10 @@ def set_sqlite_pragma(dbapi_conn, connection_record):
     cursor = dbapi_conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA foreign_keys=ON")
-    cursor.execute("PRAGMA busy_timeout=5000")
+    # Matches connect_args' timeout=30 above — pysqlite's own busy-wait
+    # is set at connect time, but this PRAGMA runs right after and would
+    # otherwise silently override it down to a much shorter wait.
+    cursor.execute("PRAGMA busy_timeout=30000")
     cursor.execute("PRAGMA synchronous=NORMAL")
     cursor.close()
 

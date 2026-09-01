@@ -111,6 +111,19 @@ def test_expired_license_returns_200_valid_false(client, db_session):
     assert body["reason"] == "expired"
 
 
+def test_unrecognized_status_fails_closed(client, db_session):
+    # Regression: status classification must be an allow-list (only
+    # "active" passes) so a typo, data corruption, or a future status
+    # value nothing here recognizes yet is denied by construction,
+    # never silently treated as valid.
+    raw_key, _ = _make_license(db_session, status="trial_expired")
+    r = _check_in(client, raw_key)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["valid"] is False
+    assert body["reason"] == "trial_expired"
+
+
 def test_perpetual_license_never_expires(client, db_session):
     raw_key, _ = _make_license(db_session, renews_at=None)
     r = _check_in(client, raw_key)

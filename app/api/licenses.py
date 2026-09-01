@@ -1,17 +1,22 @@
 """License check-in endpoint.
 
 Contract (see the Sentinel Command Center plan doc for the full
-rationale): this endpoint returns HTTP 200 for every request where the
-service itself is healthy, with `valid: bool` in the body — including
-for a key that's revoked, expired, suspended, or simply never issued.
-That's deliberate: it's the only way a caller can distinguish "the
-service answered and said no" (apply immediately, no grace) from "I
-couldn't reach it" (a real HTTP error — apply grace). Never blur that
-line by returning a 4xx for anything the service can actually answer.
+rationale): this endpoint returns HTTP 200 whenever it can actually
+determine the key's validity, with `valid: bool` in the body —
+including for a key that's revoked, expired, suspended, or simply
+never issued. That's deliberate: it's the only way a caller can
+distinguish "the service answered and said no" (apply immediately, no
+grace) from "I couldn't reach it" (a real HTTP error — apply grace).
+Never blur that line by returning a 4xx for anything the service can
+actually answer.
 
-Real HTTP errors are reserved for cases the service genuinely can't
-answer: a malformed Authorization header (no key was even presented)
-or a rate limit trip.
+Real HTTP errors cover every case the service genuinely can't answer:
+a malformed Authorization header (no key was even presented), a rate
+limit trip, request validation failures, and any unexpected server
+error (e.g. the database is unreachable) — a caller that can't get a
+trustworthy verdict must never be told `valid: false` as if that were
+one, so these fall through to FastAPI's normal error handling and are
+treated as "unreachable" by callers, same as a timeout.
 """
 
 from __future__ import annotations
@@ -69,12 +74,18 @@ def _log_checkin(
 
 @router.post("/check-in", response_model=CheckInResponse)
 @limiter.limit("20/minute")
-async def check_in(
+def check_in(
     request: Request,
     payload: CheckInRequest,
     db: Session = Depends(get_db),
     authorization: str | None = Header(default=None),
 ) -> CheckInResponse:
+    # Plain `def`, not `async def`: the body below is entirely blocking
+    # SQLAlchemy I/O. FastAPI runs sync path functions in a threadpool
+    # automatically — an `async def` doing sync DB calls would instead
+    # run them straight on the single event-loop thread (this service
+    # runs `--workers 1`), so one slow write could stall every other
+    # in-flight request, including Fly's own health-check probe.
     raw_key = _extract_raw_key(authorization)
     key_hash = hash_key(raw_key)
     now = datetime.now(tz=UTC).replace(tzinfo=None)
@@ -89,10 +100,11 @@ async def check_in(
         )
         return CheckInResponse(valid=False, reason="not_found", server_time=_iso_z(now))
 
-    if license_row.status == "revoked":
-        result = "revoked"
-    elif license_row.status == "suspended":
-        result = "suspended"
+    # Allow-list, not deny-list: any status other than "active" (a typo,
+    # data corruption, or a future status value nothing here recognizes
+    # yet) must fail closed, not silently pass through as valid.
+    if license_row.status != "active":
+        result = license_row.status
     elif license_row.renews_at is not None and license_row.renews_at < now:
         result = "expired"
     else:

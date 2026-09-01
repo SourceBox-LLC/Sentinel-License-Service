@@ -86,4 +86,9 @@ async def health_ready():
 
 @app.get("/")
 async def root():
-    return {"service": "sentinel-license-service", "time": datetime.now(tz=UTC).isoformat()}
+    # Naive UTC + trailing "Z", matching the convention every other
+    # timestamp in this service uses (see app/models/models.py and
+    # app/api/licenses.py's _iso_z) rather than an aware isoformat()
+    # with a +00:00 offset.
+    now = datetime.now(tz=UTC).replace(tzinfo=None)
+    return {"service": "sentinel-license-service", "time": now.isoformat() + "Z"}

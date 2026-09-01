@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.core.database import Base, SessionLocal, engine  # noqa: E402
 from app.core.keys import generate_key, hash_key  # noqa: E402
+from app.core.migrations import sync_indexes, sync_schema  # noqa: E402
 from app.models.models import License  # noqa: E402,F401 (registers the table on Base.metadata)
 
 
@@ -63,9 +64,14 @@ def main() -> int:
     renews_at = None if args.perpetual else now + timedelta(days=args.renews_days)
     issued_by = args.issued_by or f"manual:{getpass.getuser()}"
 
-    # Safety net for a fresh DB file that's never had the server run
-    # against it yet — idempotent, cheap given this service's tiny schema.
+    # Safety net for a DB file that's never had the server run against
+    # it yet, or was created by an older server build — mirrors
+    # app/main.py's boot sequence exactly so this CLI never operates
+    # against a schema the web process would consider stale.
+    # Idempotent, cheap given this service's tiny schema.
     Base.metadata.create_all(bind=engine)
+    sync_schema(engine, Base.metadata)
+    sync_indexes(engine, Base.metadata)
 
     db = SessionLocal()
     try:
