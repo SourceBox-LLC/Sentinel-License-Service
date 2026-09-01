@@ -7,6 +7,7 @@ A genuinely separate service from Command Center — its own codebase, its own d
 ## Run locally
 
 ```bash
+cp .env.example .env   # defaults work as-is for local dev
 uv sync --extra dev
 uv run uvicorn app.main:app --reload
 ```
@@ -32,7 +33,7 @@ uv run python scripts/manage_license.py --id 1 --reactivate
 
 `POST /v1/licenses/check-in` — `Authorization: Bearer slk_<key>`. Always returns HTTP 200 when the service itself is healthy, with `valid: bool` in the body — this is deliberate: it's how a caller tells "the service said no" (revoked/expired/suspended/unknown key — apply immediately) apart from "I couldn't reach it" (a real HTTP error — the caller should apply a grace period instead). See `app/api/licenses.py` for the full contract.
 
-`GET /health` — pure liveness. `GET /health/ready` — 503 if a critical dependency (the database) is down.
+`GET /health` — pure liveness. `GET /health/ready` — 503 if a critical dependency (database or disk) is down.
 
 ## Tests
 
@@ -46,4 +47,4 @@ Single-stage `Dockerfile` (no frontend build — this service has no UI), `fly.t
 
 ## Status
 
-Phase 1 of the plan (standalone service, verified via curl/pytest) is complete. Command Center-side integration (the background check-in loop and the actual Sentinel-AI gate) is tracked separately in the Sentinel Command repo.
+Deployed and live at `https://sentinel-license.fly.dev`. All three phases of the plan are complete: the standalone service (verified via curl/pytest), Command Center-side integration (the background check-in loop and health probe, gated behind `AUTH_PROVIDER=local` + `SENTINEL_LICENSE_KEY`), and the actual Sentinel-AI gate (enforced at every dispatch/API/MCP call site via `sentinel_blocked_by_license()`). Deferred: Stripe checkout automation — v1 issuance is manual/CLI-only (see above).
