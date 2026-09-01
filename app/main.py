@@ -12,7 +12,7 @@ from app.core.config import settings
 from app.core.database import Base, engine
 from app.core.health_probes import run_readiness_probes
 from app.core.limiter import limiter
-from app.core.migrations import sync_indexes, sync_schema
+from app.core.migrations import ensure_schema
 from app.core.sentry import init_sentry
 
 # Import models so every table registers on Base.metadata before create_all/sync_schema.
@@ -28,9 +28,7 @@ init_sentry(
 
 # This service's DB is tiny (two tables) — unlike Command Center, there's
 # no need to defer index creation to a background task; it's near-instant.
-Base.metadata.create_all(bind=engine)
-sync_schema(engine, Base.metadata)
-sync_indexes(engine, Base.metadata)
+ensure_schema(engine, Base.metadata)
 
 _STARTED_AT_MONO = time.monotonic()
 
@@ -72,8 +70,15 @@ async def health():
 
 
 @app.get("/health/ready")
-async def health_ready():
-    """Readiness — 503 if a critical probe fails, 200 otherwise."""
+def health_ready():
+    """Readiness — 503 if a critical probe fails, 200 otherwise.
+
+    Plain `def`, not `async def` — run_readiness_probes() does blocking
+    SQLite + disk I/O. Same reasoning as check_in in app/api/licenses.py:
+    an async def running blocking calls inline would stall the sole
+    event-loop thread (--workers 1) for the probe's duration, including
+    this process's ability to dispatch the check-in endpoint itself.
+    """
     report = run_readiness_probes()
     status_code = 200 if report.ready else 503
     body = {

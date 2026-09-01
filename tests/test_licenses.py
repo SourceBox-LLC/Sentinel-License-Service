@@ -177,6 +177,73 @@ def test_revoked_key_still_updates_last_seen(client, db_session):
     assert license_row.last_seen_at is not None
 
 
+# ── Client IP resolution (spoof resistance) ─────────────────────────
+
+
+def test_spoofed_x_forwarded_for_is_ignored_for_source_ip(client, db_session):
+    # Regression: uvicorn's --forwarded-allow-ips=* trusts the leftmost
+    # X-Forwarded-For entry verbatim, which a caller fully controls.
+    # get_client_ip must not use it — only a Fly-set Fly-Client-IP (or
+    # the raw TCP peer) is trustworthy.
+    raw_key, license_row = _make_license(db_session)
+    client.post(
+        "/v1/licenses/check-in",
+        json={"install_id": "x"},
+        headers={
+            "Authorization": f"Bearer {raw_key}",
+            "X-Forwarded-For": "203.0.113.7",
+        },
+    )
+    db_session.refresh(license_row)
+    assert license_row.last_seen_ip != "203.0.113.7"
+
+
+def test_fly_client_ip_header_is_used_when_present(client, db_session):
+    raw_key, license_row = _make_license(db_session)
+    client.post(
+        "/v1/licenses/check-in",
+        json={"install_id": "x"},
+        headers={
+            "Authorization": f"Bearer {raw_key}",
+            "Fly-Client-IP": "198.51.100.42",
+            "X-Forwarded-For": "203.0.113.7",  # must lose to Fly-Client-IP
+        },
+    )
+    db_session.refresh(license_row)
+    assert license_row.last_seen_ip == "198.51.100.42"
+
+
+def test_spoofed_x_forwarded_for_cannot_bypass_rate_limit(client, db_session):
+    # A different fake X-Forwarded-For on every request must not land
+    # each request in a fresh rate-limit bucket.
+    raw_key, _ = _make_license(db_session)
+    responses = [
+        client.post(
+            "/v1/licenses/check-in",
+            json={"install_id": "x"},
+            headers={
+                "Authorization": f"Bearer {raw_key}",
+                "X-Forwarded-For": f"203.0.113.{i}",
+            },
+        )
+        for i in range(21)
+    ]
+    assert responses[20].status_code == 429
+
+
+# ── Request validation ───────────────────────────────────────────────
+
+
+def test_oversized_install_id_is_rejected(client, db_session):
+    raw_key, _ = _make_license(db_session)
+    r = client.post(
+        "/v1/licenses/check-in",
+        json={"install_id": "x" * 65},
+        headers={"Authorization": f"Bearer {raw_key}"},
+    )
+    assert r.status_code == 422
+
+
 # ── Rate limiting ────────────────────────────────────────────────────
 
 

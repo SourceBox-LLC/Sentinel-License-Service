@@ -30,6 +30,16 @@ def _utcnow() -> datetime:
     return datetime.now(tz=UTC).replace(tzinfo=None)
 
 
+# Not a DB-level enum/CheckConstraint (SQLite migration churn isn't worth
+# it for a single string column) — but every writer of License.status
+# should import these instead of retyping the literals, so a typo is a
+# NameError at write time instead of a silently-persisted bad value that
+# fails a paying customer closed for the wrong reason.
+STATUS_ACTIVE = "active"
+STATUS_SUSPENDED = "suspended"
+STATUS_REVOKED = "revoked"
+
+
 class License(Base):
     __tablename__ = "licenses"
 
@@ -43,8 +53,8 @@ class License(Base):
     tier = Column(String(40), nullable=False, default="self_host_standard")
     monthly_run_cap = Column(Integer, nullable=False, default=500)
 
-    # active | suspended | revoked
-    status = Column(String(20), nullable=False, default="active", index=True)
+    # STATUS_ACTIVE | STATUS_SUSPENDED | STATUS_REVOKED (see above)
+    status = Column(String(20), nullable=False, default=STATUS_ACTIVE, index=True)
 
     customer_email = Column(String(255), nullable=True)
     customer_label = Column(String(255), nullable=True)
@@ -82,7 +92,9 @@ class LicenseCheckIn(Base):
     source_ip = Column(String(45), nullable=True)
     install_id = Column(String(64), nullable=True)
 
-    # ok | suspended | revoked | expired | not_found | rate_limited
+    # ok | suspended | revoked | expired | not_found — never rate_limited:
+    # slowapi's @limiter.limit rejects an over-cap request before
+    # check_in()'s body (and thus this insert) ever runs.
     result = Column(String(20), nullable=False)
 
     __table_args__ = (

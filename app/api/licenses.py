@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.keys import hash_key
-from app.core.limiter import limiter
+from app.core.limiter import get_client_ip, limiter
 from app.models.models import License, LicenseCheckIn
 from app.schemas.schemas import CheckInRequest, CheckInResponse
 
@@ -60,6 +60,10 @@ def _log_checkin(
     install_id: str | None,
     result: str,
 ) -> None:
+    # Caller commits (once, alongside any License row update in the
+    # same request) — see check_in below. Committing here too used to
+    # mean a lock-contention failure on this insert could leave
+    # last_seen_at durably updated with no matching audit-log row.
     db.add(
         LicenseCheckIn(
             key_hash=key_hash,
@@ -69,7 +73,6 @@ def _log_checkin(
             result=result,
         )
     )
-    db.commit()
 
 
 @router.post("/check-in", response_model=CheckInResponse)
@@ -89,7 +92,7 @@ def check_in(
     raw_key = _extract_raw_key(authorization)
     key_hash = hash_key(raw_key)
     now = datetime.now(tz=UTC).replace(tzinfo=None)
-    source_ip = request.client.host if request.client else None
+    source_ip = get_client_ip(request)
 
     license_row = db.query(License).filter_by(key_hash=key_hash).first()
 
@@ -98,6 +101,7 @@ def check_in(
             db, key_hash=key_hash, license_id=None, source_ip=source_ip,
             install_id=payload.install_id, result="not_found",
         )
+        db.commit()
         return CheckInResponse(valid=False, reason="not_found", server_time=_iso_z(now))
 
     # Allow-list, not deny-list: any status other than "active" (a typo,
@@ -115,12 +119,15 @@ def check_in(
     license_row.last_seen_at = now
     license_row.last_seen_ip = source_ip
     db.add(license_row)
-    db.commit()
 
     _log_checkin(
         db, key_hash=key_hash, license_id=license_row.id, source_ip=source_ip,
         install_id=payload.install_id, result=result,
     )
+    # Single commit for both writes above — one WAL fsync instead of
+    # two, and no window where last_seen updates durably while the
+    # audit-log insert silently fails (or vice versa).
+    db.commit()
 
     if result != "ok":
         return CheckInResponse(valid=False, reason=result, server_time=_iso_z(now))

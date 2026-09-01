@@ -60,6 +60,20 @@ def _existing_tables(engine: Engine) -> set[str]:
     return set(inspect(engine).get_table_names())
 
 
+def ensure_schema(engine: Engine, metadata) -> None:
+    """Full boot-time schema convergence: create any missing tables,
+    then add any missing columns/indexes to tables that already exist.
+
+    Single entry point for every process that touches this DB file —
+    the server and every ops CLI — so the guarantee "schema is current"
+    is structural rather than each caller having to remember to paste
+    the same three calls in the same order.
+    """
+    metadata.create_all(bind=engine)
+    sync_schema(engine, metadata)
+    sync_indexes(engine, metadata)
+
+
 def sync_schema(engine: Engine, metadata) -> list[str]:
     """Walk every table in `metadata` and add any columns missing from the DB."""
     changes: list[str] = []

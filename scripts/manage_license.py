@@ -20,9 +20,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.core.database import SessionLocal  # noqa: E402
+from app.core.database import Base, SessionLocal, engine  # noqa: E402
 from app.core.keys import hash_key  # noqa: E402
-from app.models.models import License  # noqa: E402
+from app.core.migrations import ensure_schema  # noqa: E402
+from app.models.models import STATUS_ACTIVE, STATUS_REVOKED, STATUS_SUSPENDED, License  # noqa: E402
 
 
 def _find(db, args) -> License | None:
@@ -57,6 +58,13 @@ def main() -> int:
     action.add_argument("--reactivate", action="store_true")
     args = parser.parse_args()
 
+    # Safety net for a fresh DB file this script is the first process
+    # to touch (e.g. a newly restored volume) — same ensure_schema()
+    # app/main.py and scripts/issue_license.py run, so a missing
+    # `licenses` table fails with the intended "No matching license
+    # found." message instead of an unhandled OperationalError.
+    ensure_schema(engine, Base.metadata)
+
     db = SessionLocal()
     try:
         license_row = _find(db, args)
@@ -65,11 +73,11 @@ def main() -> int:
             return 1
 
         if args.revoke:
-            license_row.status = "revoked"
+            license_row.status = STATUS_REVOKED
         elif args.suspend:
-            license_row.status = "suspended"
+            license_row.status = STATUS_SUSPENDED
         elif args.reactivate:
-            license_row.status = "active"
+            license_row.status = STATUS_ACTIVE
         # --show or no action: just print current state.
 
         if args.revoke or args.suspend or args.reactivate:
