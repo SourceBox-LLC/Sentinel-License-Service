@@ -27,11 +27,15 @@ uv run python scripts/manage_license.py --key slk_... --show
 uv run python scripts/manage_license.py --key slk_... --revoke
 uv run python scripts/manage_license.py --id 1 --suspend
 uv run python scripts/manage_license.py --id 1 --reactivate
+uv run python scripts/manage_license.py --id 1 --enable-sync
+uv run python scripts/manage_license.py --id 1 --disable-sync
 ```
 
 ## API
 
 `POST /v1/licenses/check-in` — `Authorization: Bearer slk_<key>`. Always returns HTTP 200 when the service itself is healthy, with `valid: bool` in the body — this is deliberate: it's how a caller tells "the service said no" (revoked/expired/suspended/unknown key — apply immediately) apart from "I couldn't reach it" (a real HTTP error — the caller should apply a grace period instead). See `app/api/licenses.py` for the full contract.
+
+`GET /v1/licenses/entitlements` — `Authorization: Bearer slk_<key>`. Read-only entitlement lookup, deliberately separate from `/check-in`: it doesn't touch `last_seen_at` or write a check-in audit row, so a caller validating on every request (e.g. [Sentinel-Sync-Service](https://github.com/SourceBox-LLC/Sentinel-Sync-Service), checking every push) doesn't pollute that audit trail or fight Command Center's own check-in loop for rate-limit headroom. Returns `sync_enabled` — the cloud data-sync entitlement, a separate opt-in on the same license, independent of Sentinel-AI validity.
 
 `GET /health` — pure liveness. `GET /health/ready` — 503 if a critical dependency (database or disk) is down.
 

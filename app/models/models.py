@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     ForeignKey,
@@ -52,6 +53,12 @@ class License(Base):
     # vocabularies — this is what a *license* entitles, not a Clerk plan.
     tier = Column(String(40), nullable=False, default="self_host_standard")
     monthly_run_cap = Column(Integer, nullable=False, default=500)
+
+    # Separate opt-in entitlement, not folded into `tier` — sync is a
+    # distinct product (Command Center's local-DB-to-cloud-Postgres
+    # mirror, see the Sentinel-Sync-Service plan) that a self-host
+    # customer may or may not have bought regardless of their AI tier.
+    sync_enabled = Column(Boolean, nullable=False, default=False, server_default="0")
 
     # STATUS_ACTIVE | STATUS_SUSPENDED | STATUS_REVOKED (see above)
     status = Column(String(20), nullable=False, default=STATUS_ACTIVE, index=True)
