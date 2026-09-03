@@ -10,6 +10,8 @@ Usage:
     uv run python scripts/manage_license.py --key slk_... --revoke
     uv run python scripts/manage_license.py --id 1 --suspend
     uv run python scripts/manage_license.py --id 1 --reactivate
+    uv run python scripts/manage_license.py --id 1 --enable-sync
+    uv run python scripts/manage_license.py --id 1 --disable-sync
 """
 
 from __future__ import annotations
@@ -37,7 +39,8 @@ def _find(db, args) -> License | None:
 def _print(license_row: License) -> None:
     print(
         f"id={license_row.id} tier={license_row.tier} status={license_row.status} "
-        f"cap={license_row.monthly_run_cap}/mo key=...{license_row.key_last4} "
+        f"cap={license_row.monthly_run_cap}/mo sync_enabled={license_row.sync_enabled} "
+        f"key=...{license_row.key_last4} "
         f"customer={license_row.customer_label or license_row.customer_email or '(none)'} "
         f"issued_at={license_row.issued_at} renews_at={license_row.renews_at or 'never'} "
         f"last_seen_at={license_row.last_seen_at or 'never'} "
@@ -56,6 +59,8 @@ def main() -> int:
     action.add_argument("--revoke", action="store_true")
     action.add_argument("--suspend", action="store_true")
     action.add_argument("--reactivate", action="store_true")
+    action.add_argument("--enable-sync", action="store_true", help="Turn on the cloud data-sync entitlement")
+    action.add_argument("--disable-sync", action="store_true", help="Turn off the cloud data-sync entitlement")
     args = parser.parse_args()
 
     # Safety net for a fresh DB file this script is the first process
@@ -78,9 +83,13 @@ def main() -> int:
             license_row.status = STATUS_SUSPENDED
         elif args.reactivate:
             license_row.status = STATUS_ACTIVE
+        elif args.enable_sync:
+            license_row.sync_enabled = True
+        elif args.disable_sync:
+            license_row.sync_enabled = False
         # --show or no action: just print current state.
 
-        if args.revoke or args.suspend or args.reactivate:
+        if args.revoke or args.suspend or args.reactivate or args.enable_sync or args.disable_sync:
             db.add(license_row)
             db.commit()
             db.refresh(license_row)

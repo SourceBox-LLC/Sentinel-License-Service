@@ -77,7 +77,14 @@ def test_active_license_returns_200_valid_true_with_entitlements(client, db_sess
     assert body["tier"] == "self_host_standard"
     assert body["status"] == "active"
     assert body["monthly_run_cap"] == 500
+    assert body["sync_enabled"] is False
     assert body["renews_at"] is not None
+
+
+def test_checkin_reflects_sync_enabled(client, db_session):
+    raw_key, _ = _make_license(db_session, sync_enabled=True)
+    r = _check_in(client, raw_key)
+    assert r.json()["sync_enabled"] is True
 
 
 def test_revoked_license_returns_200_valid_false(client, db_session):
@@ -255,3 +262,74 @@ def test_check_in_is_rate_limited_per_ip(client, db_session):
     assert all(r.status_code == 200 for r in responses[:20])
     assert responses[20].status_code == 429
     assert "Retry-After" in responses[20].headers
+
+
+# ── /v1/licenses/entitlements ────────────────────────────────────────
+
+
+def _entitlements(client, raw_key):
+    return client.get(
+        "/v1/licenses/entitlements",
+        headers={"Authorization": f"Bearer {raw_key}"},
+    )
+
+
+def test_entitlements_missing_auth_is_401(client):
+    r = client.get("/v1/licenses/entitlements")
+    assert r.status_code == 401
+
+
+def test_entitlements_unknown_key_returns_200_valid_false(client):
+    r = _entitlements(client, "slk_" + "0" * 32)
+    assert r.status_code == 200
+    assert r.json()["valid"] is False
+    assert r.json()["reason"] == "not_found"
+
+
+def test_entitlements_for_active_license(client, db_session):
+    raw_key, license_row = _make_license(
+        db_session, tier="self_host_standard", monthly_run_cap=500, sync_enabled=True
+    )
+    r = _entitlements(client, raw_key)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["valid"] is True
+    assert body["license_key_hash"] == license_row.key_hash
+    assert body["tier"] == "self_host_standard"
+    assert body["monthly_run_cap"] == 500
+    assert body["sync_enabled"] is True
+
+
+def test_entitlements_revoked_license_returns_valid_false(client, db_session):
+    raw_key, _ = _make_license(db_session, status="revoked")
+    r = _entitlements(client, raw_key)
+    body = r.json()
+    assert body["valid"] is False
+    assert body["reason"] == "revoked"
+    assert body["license_key_hash"] is None
+
+
+def test_entitlements_does_not_write_checkin_log(client, db_session):
+    # This is the entire reason /entitlements exists as a separate
+    # endpoint from /check-in — callers validating on every request
+    # (e.g. Sentinel-Sync-Service) must not pollute the check-in audit
+    # trail or fight Command Center's own check-in loop for rate-limit
+    # headroom.
+    raw_key, license_row = _make_license(db_session)
+    _entitlements(client, raw_key)
+    rows = db_session.query(LicenseCheckIn).filter_by(license_id=license_row.id).all()
+    assert len(rows) == 0
+
+
+def test_entitlements_does_not_update_last_seen(client, db_session):
+    raw_key, license_row = _make_license(db_session)
+    _entitlements(client, raw_key)
+    db_session.refresh(license_row)
+    assert license_row.last_seen_at is None
+
+
+def test_entitlements_is_rate_limited_higher_than_checkin(client, db_session):
+    raw_key, _ = _make_license(db_session)
+    responses = [_entitlements(client, raw_key) for _ in range(61)]
+    assert all(r.status_code == 200 for r in responses[:60])
+    assert responses[60].status_code == 429

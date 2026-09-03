@@ -31,7 +31,7 @@ from app.core.database import get_db
 from app.core.keys import hash_key
 from app.core.limiter import get_client_ip, limiter
 from app.models.models import License, LicenseCheckIn
-from app.schemas.schemas import CheckInRequest, CheckInResponse
+from app.schemas.schemas import CheckInRequest, CheckInResponse, EntitlementsResponse
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +138,56 @@ def check_in(
         tier=license_row.tier,
         status=license_row.status,
         monthly_run_cap=license_row.monthly_run_cap,
+        sync_enabled=license_row.sync_enabled,
         renews_at=_iso_z(license_row.renews_at) if license_row.renews_at else None,
+        server_time=_iso_z(now),
+    )
+
+
+@router.get("/entitlements", response_model=EntitlementsResponse)
+@limiter.limit("60/minute")
+def entitlements(
+    request: Request,
+    db: Session = Depends(get_db),
+    authorization: str | None = Header(default=None),
+) -> EntitlementsResponse:
+    """Read-only entitlement lookup for a license key.
+
+    Deliberately separate from /check-in: this doesn't touch
+    last_seen_at/last_seen_ip or write a LicenseCheckIn audit row, so
+    services other than Command Center itself (e.g. Sentinel-Sync-Service,
+    validating a push request's Bearer key) can call it freely without
+    polluting the check-in audit trail or fighting Command Center's own
+    15-minute check-in cadence for rate-limit headroom. Higher limit than
+    /check-in (60/min vs 20/min) for the same reason — expected callers
+    include a service validating on every request, not just a periodic
+    background loop.
+    """
+    raw_key = _extract_raw_key(authorization)
+    key_hash = hash_key(raw_key)
+    now = datetime.now(tz=UTC).replace(tzinfo=None)
+
+    license_row = db.query(License).filter_by(key_hash=key_hash).first()
+
+    if license_row is None:
+        return EntitlementsResponse(valid=False, reason="not_found", server_time=_iso_z(now))
+
+    if license_row.status != "active":
+        result = license_row.status
+    elif license_row.renews_at is not None and license_row.renews_at < now:
+        result = "expired"
+    else:
+        result = "ok"
+
+    if result != "ok":
+        return EntitlementsResponse(valid=False, reason=result, server_time=_iso_z(now))
+
+    return EntitlementsResponse(
+        valid=True,
+        reason=None,
+        license_key_hash=license_row.key_hash,
+        tier=license_row.tier,
+        monthly_run_cap=license_row.monthly_run_cap,
+        sync_enabled=license_row.sync_enabled,
         server_time=_iso_z(now),
     )
