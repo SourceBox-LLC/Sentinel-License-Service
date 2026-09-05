@@ -3,6 +3,7 @@ name = "sentinel-license-service"
 version = "0.1.0"
 description = "License validation service for self-hosted Sentinel Command Center installs — gates Sentinel AI access for AUTH_PROVIDER=local deployments."
 readme = "README.md"
+license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.141.1",
