@@ -9,7 +9,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
 
 # Must set env vars BEFORE importing app modules so config.py picks them up.
-os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+# Dialect-parametrised: the deployed service runs Postgres, local runs
+# SQLite. Both must stay green. Set TEST_DATABASE_URL to point the suite
+# at Postgres; the SQLite default keeps a bare `uv run pytest` working
+# with no database to set up.
+os.environ["DATABASE_URL"] = os.environ.get("TEST_DATABASE_URL") or "sqlite:///:memory:"
 
 from app.core.database import Base, engine, get_db
 from app.core.limiter import limiter

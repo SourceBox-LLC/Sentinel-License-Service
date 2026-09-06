@@ -89,19 +89,26 @@ def sync_schema(engine: Engine, metadata) -> list[str]:
         if not missing:
             continue
 
-        with engine.begin() as conn:
-            for column in missing:
-                ddl_fragment = _compile_column_ddl(column, dialect)
-                stmt = f'ALTER TABLE "{table.name}" ADD COLUMN {ddl_fragment}'
-                try:
+        for column in missing:
+            ddl_fragment = _compile_column_ddl(column, dialect)
+            stmt = f'ALTER TABLE "{table.name}" ADD COLUMN {ddl_fragment}'
+            # One transaction PER COLUMN. The log-and-continue below only
+            # isolates a failure if the failure is isolated: on SQLite
+            # each statement stands alone, but on Postgres a failed
+            # statement aborts the whole transaction, so every later
+            # column in a shared block would die with
+            # InFailedSqlTransaction — one bad column silently taking the
+            # rest with it.
+            try:
+                with engine.begin() as conn:
                     conn.execute(text(stmt))
-                    changes.append(f"{table.name}.{column.name}")
-                    logger.info("migrations: added column %s.%s", table.name, column.name)
-                except Exception as exc:  # noqa: BLE001
-                    logger.error(
-                        "migrations: failed to add %s.%s (%s): %s",
-                        table.name, column.name, stmt, exc,
-                    )
+                changes.append(f"{table.name}.{column.name}")
+                logger.info("migrations: added column %s.%s", table.name, column.name)
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "migrations: failed to add %s.%s (%s): %s",
+                    table.name, column.name, stmt, exc,
+                )
 
     if changes:
         logger.info("migrations: applied %d column additions: %s", len(changes), ", ".join(changes))

@@ -22,6 +22,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    text,
 )
 
 from app.core.database import Base
@@ -58,7 +59,7 @@ class License(Base):
     # distinct product (Command Center's local-DB-to-cloud-Postgres
     # mirror, see the Sentinel-Sync-Service plan) that a self-host
     # customer may or may not have bought regardless of their AI tier.
-    sync_enabled = Column(Boolean, nullable=False, default=False, server_default="0")
+    sync_enabled = Column(Boolean, nullable=False, default=False, server_default=text("false"))
 
     # STATUS_ACTIVE | STATUS_SUSPENDED | STATUS_REVOKED (see above)
     status = Column(String(20), nullable=False, default=STATUS_ACTIVE, index=True)
