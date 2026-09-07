@@ -90,10 +90,12 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      - name: Off-platform copy skipped (no BACKUP_ENCRYPTION_KEY)
+      # See Command Center's copy: off-platform backups are off by
+      # operator decision (2026-09-07), so this is informational rather
+      # than a daily ::warning:: about a settled choice.
+      - name: Off-platform copy not configured (by design)
         if: env.BACKUP_KEY == ''
         run: |
-          echo "::warning::BACKUP_ENCRYPTION_KEY repo secret is not set — the portable" \
-            "dump exists on the Fly volume only. Managed cluster snapshots still cover" \
-            "cluster-level loss, but there is no off-platform copy. Set the secret to" \
-            "enable encrypted artifact copies."
+          echo "BACKUP_ENCRYPTION_KEY is unset — off-platform copies are OFF by choice."
+          echo "Backups are Fly-only: managed cluster snapshots plus the portable"
+          echo "pg_dump written above. Set the secret to turn artifacts back on."
