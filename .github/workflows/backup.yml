@@ -43,17 +43,17 @@ jobs:
           flyctl ssh console -a sentinel-license -C "bash /app/scripts/backup_db.sh"
 
       # Visibility only — never fails the job, but must not fail SILENTLY.
-      # The database lives on a different Fly app (sentinel-license-db), and
+      # The database lives on a different Fly app (sentinel-postgres), and
       # an app-scoped FLY_API_TOKEN cannot see another app: it returns
       # `Could not find App`, indistinguishable from "no snapshots" under
       # a bare `|| true`. See Command Center's copy of this workflow.
       - name: List cluster snapshots (visibility)
         run: |
-          if out=$(flyctl volumes list -a sentinel-license-db 2>&1); then
+          if out=$(flyctl volumes list -a sentinel-postgres 2>&1); then
             echo "$out"
           else
             echo "$out"
-            echo "::warning::Could not read sentinel-license-db volumes. If this says" \
+            echo "::warning::Could not read sentinel-postgres volumes. If this says" \
               "'Could not find App', FLY_API_TOKEN is scoped to sentinel-license only" \
               "and cannot see the database app — the backup itself still ran, but" \
               "cluster snapshots are NOT being checked here. Use an org-scoped token" \
