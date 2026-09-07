@@ -4,7 +4,7 @@ Validates license keys for self-hosted Sentinel Command Center installs (`AUTH_P
 
 A genuinely separate service from Command Center — its own codebase, its own deploy target, its own database. Self-hosted operators' copy of Command Center never contains this service's code.
 
-The database is Postgres in production (its own database on the shared `sentinel-sync-db` cluster; migrated from SQLite 2026-09-07). It falls back to SQLite when `DATABASE_URL` is unset, so a local run needs no database to set up — `app/core/database.py` branches on the URL scheme and CI runs the suite against both.
+The database is Postgres in production, on its own dedicated cluster `sentinel-license-db` (migrated from SQLite 2026-09-07). It falls back to SQLite when `DATABASE_URL` is unset, so a local run needs no database to set up — `app/core/database.py` branches on the URL scheme and CI runs the suite against both.
 
 ## Run locally
 
