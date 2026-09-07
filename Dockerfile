@@ -4,11 +4,25 @@ FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
 WORKDIR /app
 
-# sqlite3 kept for backup/restore parity with Command Center's own
-# operational scripts (PRAGMA integrity_check, online .backup).
+# postgresql-client for backup/restore parity with Command Center's own
+# operational scripts (pg_dump / pg_restore / psql).
+#
+# Version 18 from PGDG, not Debian's 15: pg_dump refuses to dump a server
+# with a newer major version than itself, and this service's database
+# lives on the same 18.x cluster as Command Center's. See that repo's
+# Dockerfile for the full note. Bump when the cluster major moves.
+#
+# (sqlite3 was here until 2026-09, when this service moved off SQLite.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    sqlite3 \
+    curl ca-certificates gnupg \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+         -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+         > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+         postgresql-client-18 \
+    && apt-get purge -y gnupg && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml uv.lock* ./

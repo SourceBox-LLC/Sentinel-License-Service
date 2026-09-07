@@ -1,0 +1,85 @@
+name: Scheduled DB Backup
+
+# Daily portable dump of the production Postgres database.
+#
+# This service had NO scheduled backup before 2026-09 — it ran SQLite on
+# a Fly volume with nothing copying it anywhere. That was a real gap:
+# licences are the record of who has paid for what, and re-deriving them
+# from Stripe after a loss would be manual and slow.
+#
+# WHERE BACKUPS ACTUALLY COME FROM
+#   The managed cluster's snapshots are the PRIMARY backup. This workflow
+#   produces the portable pg_dump that restores onto any Postgres
+#   anywhere, so a Fly account/region loss can't take the backups down
+#   with the primary.
+#
+# Mirrors Command Center's .github/workflows/backup.yml step for step —
+# same scripts, same encryption, same artifact retention. Keep them in
+# sync; if you change one, change the other.
+#
+# Restore: Command Center's docs/runbooks/DISASTER_RECOVERY.md, using
+# this repo's scripts/restore_db.sh.
+
+on:
+  schedule:
+    # 09:47 UTC — half an hour after Command Center's 09:17 run so the
+    # two jobs don't dump the same cluster at the same moment.
+    - cron: "47 9 * * *"
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      BACKUP_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY }}
+    steps:
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Run pg_dump on the machine
+        # Runs on the machine so DATABASE_URL stays in Fly and is never
+        # copied into GitHub secrets.
+        run: |
+          flyctl ssh console -a sentinel-license -C "bash /app/scripts/backup_db.sh"
+
+      - name: List cluster snapshots (visibility)
+        run: |
+          flyctl volumes list -a sentinel-sync-db || true
+
+      - name: Pull newest dump off the machine
+        if: env.BACKUP_KEY != ''
+        run: |
+          LATEST=$(flyctl ssh console -a sentinel-license -C "sh -c 'ls -1t /data/backups/licenses-*.dump | head -1'" | tr -d '\r' | tail -1)
+          echo "newest dump: $LATEST"
+          test -n "$LATEST"
+          flyctl ssh sftp get "$LATEST" ./backup.dump -a sentinel-license
+          ls -lh backup.dump
+
+      - name: Encrypt for off-platform storage
+        if: env.BACKUP_KEY != ''
+        run: |
+          # AES-256-CBC + PBKDF2. Decrypt with:
+          #   openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+          #     -in backup.dump.enc -out backup.dump -pass pass:<key>
+          # then restore with scripts/restore_db.sh.
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt \
+            -in backup.dump -out backup.dump.enc -pass env:BACKUP_KEY
+          rm backup.dump
+          ls -lh backup.dump.enc
+
+      - name: Store encrypted dump as artifact (30-day retention)
+        if: env.BACKUP_KEY != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: license-backup-${{ github.run_id }}
+          path: backup.dump.enc
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Off-platform copy skipped (no BACKUP_ENCRYPTION_KEY)
+        if: env.BACKUP_KEY == ''
+        run: |
+          echo "::warning::BACKUP_ENCRYPTION_KEY repo secret is not set — the portable" \
+            "dump exists on the Fly volume only. Managed cluster snapshots still cover" \
+            "cluster-level loss, but there is no off-platform copy. Set the secret to" \
+            "enable encrypted artifact copies."

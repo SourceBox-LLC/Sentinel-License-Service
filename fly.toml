@@ -2,11 +2,13 @@
 #
 # Much smaller footprint than Command Center: no video/HLS workload,
 # check-in traffic is one small request per self-hosted install every
-# ~15 minutes. Same single-machine/single-volume topology and the same
-# reason for it — SQLite-on-a-volume can't do rolling deploys (a second
-# machine can't attach the same volume) — but the blast radius of a
-# brief deploy-time gap is negligible here: an install that hits a
-# check-in mid-deploy just retries on its next tick.
+# ~15 minutes. The blast radius of a brief deploy-time gap is negligible
+# here regardless: an install that hits a check-in mid-deploy just
+# retries on its next tick.
+#
+# The database moved to the shared Postgres cluster (sentinel-sync-db,
+# database `sentinel_license`), so the old single-volume constraint on
+# rolling deploys no longer applies.
 
 app = "sentinel-license"
 primary_region = "sjc"
@@ -14,14 +16,22 @@ primary_region = "sjc"
 [build]
 
 [env]
-  DATABASE_URL = "sqlite:////data/licenses.db"
+  # DATABASE_URL lives in `fly secrets` now — it points at Postgres and
+  # carries a password, and this file is committed. A local run with no
+  # DATABASE_URL still falls back to SQLite via app/core/config.py.
 
+# Kept only to hold the pre-migration SQLite file as the rollback copy,
+# and because scripts/backup_db.sh still writes here. Once the backup job
+# is pg_dump-based (and the rollback window has closed) this mount and
+# its volume can go — nothing else on this service touches /data.
 [[mounts]]
   source = "sentinel_license_data"
   destination = "/data"
 
 [deploy]
-  strategy = "immediate"
+  # `immediate` was a workaround for the single-volume topology, where a
+  # rolling deploy's parallel machine couldn't attach the same volume.
+  # Now on Postgres, so this uses the default rolling strategy.
 
 [http_service]
   internal_port = 8000

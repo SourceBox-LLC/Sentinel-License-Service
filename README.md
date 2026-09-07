@@ -2,7 +2,9 @@
 
 Validates license keys for self-hosted Sentinel Command Center installs (`AUTH_PROVIDER=local`). This is the mechanism that lets a self-hosted operator pay to unlock **Sentinel AI** — the one feature with a real ongoing LLM cost regardless of who runs the dashboard. Every other self-host feature (cameras, recording, motion, MCP) stays free and unaffected by this service entirely.
 
-A genuinely separate service from Command Center — its own codebase, its own deploy target, its own SQLite database. Self-hosted operators' copy of Command Center never contains this service's code.
+A genuinely separate service from Command Center — its own codebase, its own deploy target, its own database. Self-hosted operators' copy of Command Center never contains this service's code.
+
+The database is Postgres in production (its own database on the shared `sentinel-sync-db` cluster; migrated from SQLite 2026-09-07). It falls back to SQLite when `DATABASE_URL` is unset, so a local run needs no database to set up — `app/core/database.py` branches on the URL scheme and CI runs the suite against both.
 
 ## Run locally
 
