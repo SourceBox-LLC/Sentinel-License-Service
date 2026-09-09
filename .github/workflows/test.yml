@@ -1,10 +1,15 @@
-name: Test
+name: Test & Deploy
 
-# Deploy automation is deferred deliberately (see the Sentinel Command
-# plan doc, Phase 1: "fine to start with a manual `fly deploy` for the
-# very first cut given a human should be watching the first-ever deploy
-# of new infrastructure anyway; automate once phase 1 is stable"). This
-# workflow only covers lint + dependency audit + tests.
+# Tests on every push and PR; deploys to Fly on pushes to master.
+#
+# Deploy automation was deferred so a human could watch the first-ever
+# deploy of new infrastructure, with a note to "automate once phase 1 is
+# stable". Phase 1 is stable, and leaving it deferred created a worse
+# problem than it avoided: fly.toml became a file that did nothing. A
+# scale-to-zero change merged with CI green on 2026-09-09 and never
+# reached Fly — the app kept running always-on until someone noticed and
+# deployed by hand. Config that silently doesn't apply is more dangerous
+# than no config.
 
 on:
   push:
@@ -68,3 +73,36 @@ jobs:
         env:
           TEST_DATABASE_URL: ${{ matrix.test_database_url }}
         run: uv run pytest -v
+
+  deploy:
+    name: Deploy to Fly.io
+    runs-on: ubuntu-latest
+    # Waits on BOTH matrix legs (sqlite and postgres) — this service runs
+    # the same code against either dialect, so a green sqlite run alone
+    # is not evidence the deploy is safe.
+    needs: test
+    # Push-only: a PR runs the tests above but never ships.
+    if: github.event_name == 'push'
+    # Serialize so two quick pushes don't race on the machine update.
+    concurrency:
+      group: deploy-sentinel-license
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # --strategy immediate because this app mounts a volume
+      # (sentinel_license_data). The default rolling strategy tries to
+      # stand up a parallel machine first and errors on the volume's
+      # single attachment slot. Sentinel-Sync has no volume and so needs
+      # no override; Command Center has the same constraint and the same
+      # flag.
+      #
+      # --ha=false because Fly otherwise provisions TWO machines, which
+      # this service does not need and which the volume cannot serve
+      # anyway.
+      - name: flyctl deploy
+        run: flyctl deploy --remote-only --strategy immediate --ha=false --yes
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
