@@ -36,12 +36,36 @@ primary_region = "sjc"
 [http_service]
   internal_port = 8000
   force_https = true
-  auto_stop_machines = "off"
+  auto_stop_machines = "stop"
   auto_start_machines = true
-  # Always-warm rather than scale-to-zero: the ~15-minute check-in
-  # interval means a cold start would routinely leak into the client's
-  # grace-period math (see Command Center's SENTINEL_LICENSE_GRACE_HOURS).
-  min_machines_running = 1
+  # Scale to zero. This service is called by self-hosted Command Center
+  # installs on a ~15-minute background tick, so it is idle by default:
+  # today, with no self-hosted installs, it serves literally nothing.
+  #
+  # The previous comment here justified always-warm by claiming a cold
+  # start "would routinely leak into the client's grace-period math".
+  # That had the scale wrong by four orders of magnitude —
+  # SENTINEL_LICENSE_GRACE_HOURS is 72 HOURS, and this service binds its
+  # port in ~4s (measured 2026-09-09). A cold start cannot meaningfully
+  # consume a three-day window.
+  #
+  # Three things make scale-to-zero safe here, and all three are worth
+  # re-checking before copying this to another service:
+  #
+  #   1. Boot fits the window. Fly's proxy waits ~8s for an auto-started
+  #      machine to bind. 4s clears it. (The Sentinel AI agent needs 10s
+  #      and had to be kept warm for exactly this reason.)
+  #   2. The caller waits longer than Fly gives up: Command Center's
+  #      check-in timeout is 10s.
+  #   3. A miss is free. license_client.py treats network/5xx as
+  #      "unreachable" and applies the 72-hour grace window, so a failed
+  #      check-in is a designed path, not an error path — the next tick
+  #      15 minutes later catches it and no customer notices.
+  #
+  # This flips if a license check ever moves onto a user-blocking path
+  # (a synchronous validation on dashboard load). Then a 4s cold start
+  # becomes a 4s page stall and this needs to go back to always-warm.
+  min_machines_running = 0
   processes = ["app"]
 
   [[http_service.checks]]
