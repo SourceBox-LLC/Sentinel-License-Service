@@ -49,7 +49,13 @@ uv run pytest
 
 ## Deploy
 
-Single-stage `Dockerfile` (no frontend build — this service has no UI), `fly.toml` targets a much smaller VM than Command Center's (no video workload, tiny check-in traffic). First deploy is manual (`fly deploy`) by design — see `.github/workflows/test.yml`'s comment for why deploy automation is deferred.
+Single-stage `Dockerfile` (no frontend build — this service has no UI). `fly.toml` targets a much smaller VM than Command Center's: 256 MB, no video workload, tiny check-in traffic.
+
+**Deploys from CI.** Every push to `master` runs the tests against both SQLite and Postgres, then `flyctl deploy`. Deploy automation was deferred while this was new infrastructure; that turned out worse than what it avoided, because `fly.toml` became a file that did nothing — a scale-to-zero change merged with CI fully green on 2026-09-09 and never reached Fly, and it *looked* applied because the commit was on master. Config that silently doesn't apply is more dangerous than no config.
+
+Two flags, each for a reason: `--strategy immediate` because this app mounts `sentinel_license_data` and the default rolling strategy errors on the volume's single attachment slot; `--ha=false` because Fly otherwise provisions two machines, which one volume can't serve anyway.
+
+**Scales to zero.** Self-hosted installs check in on a ~15-minute background tick, so this is idle by default. Safe because boot is ~4s — inside the ~8s Fly's proxy waits for an auto-started machine to bind — the caller's timeout is 10s, and a missed check-in is a *designed* path: Command Center treats network/5xx as "unreachable" and applies a 72-hour grace window. This flips if a licence check ever moves onto a user-blocking path; then a 4s cold start becomes a 4s page stall.
 
 ## Status
 
