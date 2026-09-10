@@ -36,11 +36,35 @@ jobs:
     steps:
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
+      - name: Start the machine (app scales to zero)
+        # auto_stop_machines=stop + min_machines_running=0 (see fly.toml)
+        # means the app's only VM is stopped when idle — which it always is
+        # at 09:47 UTC, because this service has no self-hosted installs
+        # calling in yet. flyctl ssh console connects over WireGuard/SSH,
+        # NOT through the HTTP proxy that auto-starts machines, so it fails
+        # with "app sentinel-license has no started VMs" when the machine is
+        # stopped. We start it here and stop it after the dump to restore the
+        # scale-to-zero state (keeping the app at zero cost when idle).
+        run: |
+          MACHINE_ID=$(flyctl machine list -a sentinel-license -q | head -1)
+          if [ -z "$MACHINE_ID" ]; then
+            echo "::error::No machine found for sentinel-license. Has the app been deployed?"
+            exit 1
+          fi
+          echo "machine_id=$MACHINE_ID" >> "$GITHUB_ENV"
+          echo "Starting machine $MACHINE_ID..."
+          flyctl machine start "$MACHINE_ID" -a sentinel-license
+          # The app boots in ~4s (measured 2026-09-09, see fly.toml). Fly's
+          # proxy allows ~8s for an auto-started machine to bind. Wait that
+          # full window so the SSH server is accepting connections before
+          # flyctl ssh console tries to connect.
+          sleep 8
+
       - name: Run pg_dump on the machine
         # Runs on the machine so DATABASE_URL stays in Fly and is never
         # copied into GitHub secrets.
         run: |
-          flyctl ssh console -a sentinel-license -C "bash /app/scripts/backup_db.sh"
+          flyctl ssh console -a sentinel-license --machine "$machine_id" -C "bash /app/scripts/backup_db.sh"
 
       # Visibility only — never fails the job, but must not fail SILENTLY.
       # The database lives on a different Fly app (sentinel-postgres), and
@@ -63,10 +87,10 @@ jobs:
       - name: Pull newest dump off the machine
         if: env.BACKUP_KEY != ''
         run: |
-          LATEST=$(flyctl ssh console -a sentinel-license -C "sh -c 'ls -1t /data/backups/licenses-*.dump | head -1'" | tr -d '\r' | tail -1)
+          LATEST=$(flyctl ssh console -a sentinel-license --machine "$machine_id" -C "sh -c 'ls -1t /data/backups/licenses-*.dump | head -1'" | tr -d '\r' | tail -1)
           echo "newest dump: $LATEST"
           test -n "$LATEST"
-          flyctl ssh sftp get "$LATEST" ./backup.dump -a sentinel-license
+          flyctl ssh sftp get "$LATEST" ./backup.dump -a sentinel-license --machine "$machine_id"
           ls -lh backup.dump
 
       - name: Encrypt for off-platform storage
@@ -99,3 +123,15 @@ jobs:
           echo "BACKUP_ENCRYPTION_KEY is unset — off-platform copies are OFF by choice."
           echo "Backups are Fly-only: managed cluster snapshots plus the portable"
           echo "pg_dump written above. Set the secret to turn artifacts back on."
+
+      # Always stop the machine we started above, even on failure, so the
+      # app returns to the scale-to-zero state (auto_stop_machines=stop,
+      # min_machines_running=0). Without this a failed run would leave the
+      # machine running and accumulating cost until the next HTTP request
+      # triggered auto-stop — which, with no self-hosted installs yet,
+      # would be never.
+      - name: Stop the machine (restore scale-to-zero)
+        if: always() && env.machine_id != ''
+        run: |
+          echo "Stopping machine $machine_id to restore scale-to-zero..."
+          flyctl machine stop "$machine_id" -a sentinel-license || true
