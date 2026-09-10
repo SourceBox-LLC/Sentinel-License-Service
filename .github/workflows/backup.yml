@@ -36,6 +36,29 @@ jobs:
     steps:
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
+        # REQUIRED since this app started scaling to zero (2026-09-09).
+        #
+        # `flyctl ssh console` does NOT wake a stopped machine. Fly
+        # auto-starts on a connection to one of the app's SERVICES; SSH is
+        # not that path, so the very next step failed outright with
+        # "app sentinel-license has no started VMs" — and it failed
+        # SILENTLY, in the sense that nothing but this workflow's own red
+        # X reported that a day's backup had not been taken.
+        #
+        # Starting explicitly is the fix. It is safe when the machine is
+        # already running (no-op), and the machine idles back to stopped
+        # on its own afterwards, so scale-to-zero is preserved.
+      - name: Wake the machine (it scales to zero)
+        run: |
+          MACHINE=$(flyctl machines list -a sentinel-license --json | jq -r '.[0].id')
+          test -n "$MACHINE" && test "$MACHINE" != "null"
+          flyctl machine start "$MACHINE" -a sentinel-license || true
+          # Give the process time to bind before SSH; boot is ~4s.
+          for i in $(seq 1 20); do
+            flyctl ssh console -a sentinel-license -C "true" >/dev/null 2>&1 && break
+            sleep 3
+          done
+
       - name: Run pg_dump on the machine
         # Runs on the machine so DATABASE_URL stays in Fly and is never
         # copied into GitHub secrets.
