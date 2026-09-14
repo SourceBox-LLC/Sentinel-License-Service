@@ -9,7 +9,6 @@
 //! The raw value is generated once, shown once by `issue`, and never
 //! persisted or logged.
 
-use rand::RngCore;
 use sha2::{Digest, Sha256};
 
 pub const KEY_PREFIX: &str = "slk_";
@@ -18,8 +17,12 @@ pub const KEY_PREFIX: &str = "slk_";
 /// `KEY_PREFIX + secrets.token_hex(16)`.
 pub fn generate_key() -> String {
     let mut bytes = [0u8; 16];
-    // OsRng, not a seeded PRNG — this is key material.
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    // Straight from the OS CSPRNG. This used `rand::rngs::OsRng`, but
+    // rand 0.10 removed OsRng from that path entirely; rather than chase
+    // it across another rand reshuffle, `getrandom` is the thing rand was
+    // calling underneath anyway, and for key material the shorter, more
+    // obviously-correct call is the better dependency.
+    getrandom::fill(&mut bytes).expect("OS entropy is available");
     let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
     format!("{KEY_PREFIX}{hex}")
 }
@@ -27,7 +30,17 @@ pub fn generate_key() -> String {
 pub fn hash_key(raw_key: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(raw_key.as_bytes());
-    format!("{:x}", hasher.finalize())
+    // Explicit hex rather than `format!("{:x}", ..)`: sha2 0.11 changed
+    // finalize() to return a type that no longer implements LowerHex.
+    //
+    // This function's output IS the stored key_hash. A silently different
+    // encoding would orphan every license row rather than fail a build,
+    // which is why the fixed vector below is a test and not a comment.
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// The last four characters, stored alongside the hash so an operator can
