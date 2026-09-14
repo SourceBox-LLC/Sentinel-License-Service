@@ -35,18 +35,16 @@ jobs:
   test:
     name: Tests
     runs-on: ubuntu-latest
-    # Deployed on Postgres, run locally on SQLite — both have to stay
-    # green, so the suite runs against each. fail-fast off so a
-    # dialect-specific break shows which engine died and whether the
-    # other survived.
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - dialect: sqlite
-            test_database_url: ""
-          - dialect: postgres
-            test_database_url: postgresql+psycopg://licensesvc:licensesvc@localhost:5432/license_test
+    # No dialect matrix any more. The Python service supported SQLite for
+    # local runs and Postgres in production, so the suite ran twice. The
+    # Rust build enables only sqlx's `postgres` feature — there is no
+    # SQLite code path left to test, and a second leg that skipped every
+    # database test was proving nothing.
+    #
+    # NOTE: this renamed the reported check from "Tests (sqlite)" to
+    # "Tests". Branch protection required the old name, and a required
+    # check that never reports blocks every PR forever — the protection
+    # rule was updated to match in the same change.
     services:
       postgres:
         image: postgres:16-alpine
@@ -64,27 +62,49 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v10.1.0
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
 
-      - name: Set up Python
-        run: uv python install 3.12
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
 
-      - name: Install dependencies
-        run: uv sync --extra dev
+      - name: Build
+        run: cargo build --locked
 
-      - name: Lint with ruff
-        run: uv run ruff check
+      # Not `-D warnings`, matching the sibling repos: a style warning
+      # shouldn't go red on arrival and train everyone to ignore the
+      # column. This still fails on any clippy *error*.
+      - name: Clippy
+        run: cargo clippy --all-targets --locked
 
-      - name: Dependency scan (pip-audit)
-        run: uv run pip-audit --strict
+      - name: Formatting
+        run: cargo fmt --check
 
-      # Empty for the sqlite leg; conftest.py falls back to in-memory
-      # SQLite when it's unset or blank, so both legs share one command.
-      - name: Run tests (${{ matrix.dialect }})
+      # The wire-contract tests need a real Postgres — they assert the
+      # check-in audit row, last_seen writes, and that /entitlements
+      # writes nothing, which is where a port breaks. Without
+      # TEST_DATABASE_URL they skip themselves, so this is what makes
+      # them run.
+      - name: Tests
+        run: cargo test --locked
         env:
-          TEST_DATABASE_URL: ${{ matrix.test_database_url }}
-        run: uv run pytest -v
+          TEST_DATABASE_URL: postgresql://licensesvc:licensesvc@localhost:5432/license_test
+
+      # RUSTSEC-2023-0071 is ignored, narrowly. It is the Marvin timing
+      # attack in `rsa`, which has no fixed version — but `rsa` is not
+      # compiled into this binary. It reaches Cargo.lock through
+      # `sqlx-mysql`, an OPTIONAL dependency of the sqlx facade that this
+      # crate never enables. Cargo.lock records the union of optional
+      # dependencies regardless of features, and cargo audit reads the
+      # lockfile rather than the built graph. Verified with
+      # `cargo tree -e normal | grep sqlx-`: core, macros, macros-core,
+      # postgres — no mysql, no rsa. Same waiver as Sentinel-Sync-Service.
+      - name: Security advisories (cargo audit)
+        run: |
+          cargo install cargo-audit --locked || true
+          cargo audit --ignore RUSTSEC-2023-0071
 
   deploy:
     name: Deploy to Fly.io

@@ -1,37 +1,58 @@
-# Single-stage build — this service ships no frontend/UI, so there's no
-# equivalent of Command Center's Node build stage to run first.
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+# ---------------------------------------------------------------------
+# Build
+# ---------------------------------------------------------------------
+FROM rust:1.98-slim-bookworm AS builder
+
+WORKDIR /build
+
+# Dependency layer first: Cargo.toml/lock change far less often than
+# src/, so a source-only edit reuses the compiled dependency graph.
+COPY Cargo.toml Cargo.lock ./
+RUN mkdir src && echo 'fn main() {}' > src/main.rs \
+ && cargo build --release --locked \
+ && rm -rf src
+
+COPY src ./src
+COPY migrations ./migrations
+# Cargo caches on mtime; the stub main.rs above means the real one can
+# look "already built" without this.
+RUN touch src/main.rs && cargo build --release --locked
+
+# ---------------------------------------------------------------------
+# Runtime
+# ---------------------------------------------------------------------
+FROM debian:bookworm-slim
+
+# postgresql-client is NOT optional here, unlike the sync service.
+# .github/workflows/backup.yml runs `flyctl ssh console -C "bash
+# /app/scripts/backup_db.sh"` nightly, and that script needs pg_dump and
+# psql on PATH. Dropping them would leave a green deploy and a backup job
+# that fails at 09:47 UTC — the failure mode this repo has already had
+# once, when scale-to-zero broke the same job.
+#
+# ca-certificates for outbound TLS; bash because backup_db.sh is bash,
+# not sh.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      postgresql-client \
+      bash \
+ && rm -rf /var/lib/apt/lists/*
+
+# Unprivileged. The Python image ran as root; nothing here needs it.
+# Named `licensesvc` rather than `license` for symmetry with the DB role.
+RUN useradd --system --uid 10001 --create-home --shell /usr/sbin/nologin licensesvc
 
 WORKDIR /app
 
-# postgresql-client for backup/restore parity with Command Center's own
-# operational scripts (pg_dump / pg_restore / psql).
-#
-# Version 18 from PGDG, not Debian's 15: pg_dump refuses to dump a server
-# with a newer major version than itself, and this service's database
-# lives on the same 18.x cluster as Command Center's. See that repo's
-# Dockerfile for the full note. Bump when the cluster major moves.
-#
-# (sqlite3 was here until 2026-09, when this service moved off SQLite.)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates gnupg \
-    && install -d /usr/share/postgresql-common/pgdg \
-    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
-         -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
-    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
-         > /etc/apt/sources.list.d/pgdg.list \
-    && apt-get update && apt-get install -y --no-install-recommends \
-         postgresql-client-18 \
-    && apt-get purge -y gnupg && apt-get autoremove -y \
-    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /build/target/release/sentinel-license-service /usr/local/bin/sentinel-license-service
+# Kept at /app/scripts because backup.yml hard-codes that path.
+COPY scripts ./scripts
+RUN chmod +x ./scripts/*.sh
 
-COPY pyproject.toml uv.lock* ./
-RUN uv sync --frozen --no-dev
-
-COPY . .
-
-ENV PYTHONUNBUFFERED=1
+# /data is the mounted volume backup_db.sh writes dumps into.
+RUN mkdir -p /data && chown licensesvc:licensesvc /data /app
+USER licensesvc
 
 EXPOSE 8000
-
-CMD ["/app/.venv/bin/uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--forwarded-allow-ips=*", "--no-access-log"]
+CMD ["/usr/local/bin/sentinel-license-service"]
