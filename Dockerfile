@@ -26,17 +26,33 @@ FROM debian:bookworm-slim
 # postgresql-client is NOT optional here, unlike the sync service.
 # .github/workflows/backup.yml runs `flyctl ssh console -C "bash
 # /app/scripts/backup_db.sh"` nightly, and that script needs pg_dump and
-# psql on PATH. Dropping them would leave a green deploy and a backup job
-# that fails at 09:47 UTC — the failure mode this repo has already had
-# once, when scale-to-zero broke the same job.
+# psql on PATH.
+#
+# AND THE MAJOR VERSION MUST MATCH THE SERVER. Debian bookworm ships
+# postgresql-client 15; the cluster is 18. pg_dump refuses to dump a
+# newer server outright:
+#
+#   pg_dump: error: aborting because of server version mismatch
+#   detail: server version: 18.6; pg_dump version: 15.19
+#
+# So this pulls client 18 from PGDG, exactly as the Python image did —
+# that Dockerfile went to the same trouble and the port initially dropped
+# it, which produced a green deploy and a broken backup. gnupg is purged
+# after adding the key so it doesn't linger in the runtime image.
 #
 # ca-certificates for outbound TLS; bash because backup_db.sh is bash,
 # not sh.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates \
-      postgresql-client \
-      bash \
+      ca-certificates curl gnupg bash \
+ && install -d /usr/share/postgresql-common/pgdg \
+ && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+      -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+ && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends postgresql-client-18 \
+ && apt-get purge -y gnupg && apt-get autoremove -y \
  && rm -rf /var/lib/apt/lists/*
 
 # Unprivileged. The Python image ran as root; nothing here needs it.
