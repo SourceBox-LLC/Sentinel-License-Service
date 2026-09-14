@@ -35,7 +35,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 anyhow = "1"
 sha2 = "0.10"
 # Key issuance needs a CSPRNG; `secrets.token_hex(16)` in the Python CLI.
-rand = "0.8"
+rand = "0.10"
 # The admin CLI (issue / show / revoke / suspend …) that replaced the
 # Python scripts.
 clap = { version = "4", features = ["derive", "env"] }
