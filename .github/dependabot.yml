@@ -7,7 +7,7 @@
 # pinning the service to a Starlette line with 7 advisories. All three
 # surfaced on a rebuild of a repo nobody had rebuilt since June.
 #
-# `pip-audit --strict` in the Test workflow catches a *known advisory*
+# `cargo audit` in the Test workflow catches a *known advisory*
 # in what is already pinned. It does nothing about a lockfile quietly
 # ageing out of support. That is what this is for.
 #
@@ -23,8 +23,12 @@
 # that repo's PAT fix is proven.
 version: 2
 updates:
-  # Python (uv) — pyproject.toml + uv.lock live at the repo root.
-  - package-ecosystem: "uv"
+  # Rust — Cargo.toml + Cargo.lock at the repo root.
+  #
+  # Was `uv` until 2026-09-14, when this service was ported to Rust.
+  # Leaving it pointed at a deleted pyproject.toml produces PRs that fail
+  # on open, which reads as a broken repo rather than a stale config.
+  - package-ecosystem: "cargo"
     directory: "/"
     schedule:
       interval: "weekly"
