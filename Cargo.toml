@@ -1,0 +1,50 @@
+[package]
+name = "sentinel-license-service"
+version = "0.1.0"
+edition = "2021"
+authors = ["SourceBox LLC"]
+description = "License issuance and check-in for self-hosted Sentinel Command Center installs."
+license = "AGPL-3.0"
+repository = "https://github.com/SourceBox-LLC/Sentinel-License-Service"
+
+[[bin]]
+name = "sentinel-license-service"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+tower-http = { version = "0.6", features = ["limit"] }
+
+# Runtime-checked queries, not the compile-time macros, so a build needs
+# no live database.
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio-rustls",
+    "postgres",
+    "chrono",
+    "macros",
+    "migrate",
+] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+anyhow = "1"
+sha2 = "0.10"
+# Key issuance needs a CSPRNG; `secrets.token_hex(16)` in the Python CLI.
+rand = "0.8"
+# The admin CLI (issue / show / revoke / suspend …) that replaced the
+# Python scripts.
+clap = { version = "4", features = ["derive", "env"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = "debuginfo"

@@ -17,7 +17,7 @@ uv run uvicorn app.main:app --reload
 ## Issue a license (v1: manual/CLI only, no self-serve checkout yet)
 
 ```bash
-uv run python scripts/issue_license.py --email customer@example.com --label "Jane Doe — invoice #123" --renews-days 365
+sentinel-license-service issue --email customer@example.com --label "Jane Doe — invoice #123" --renews-days 365
 ```
 
 Prints the raw key exactly once — it is never stored or logged in plaintext, only its SHA-256 hash.
@@ -25,12 +25,12 @@ Prints the raw key exactly once — it is never stored or logged in plaintext, o
 ## Manage an existing license
 
 ```bash
-uv run python scripts/manage_license.py --key slk_... --show
-uv run python scripts/manage_license.py --key slk_... --revoke
-uv run python scripts/manage_license.py --id 1 --suspend
-uv run python scripts/manage_license.py --id 1 --reactivate
-uv run python scripts/manage_license.py --id 1 --enable-sync
-uv run python scripts/manage_license.py --id 1 --disable-sync
+sentinel-license-service show --key slk_...
+sentinel-license-service revoke --key slk_...
+sentinel-license-service suspend --id 1
+sentinel-license-service reactivate --id 1
+sentinel-license-service set-sync --id 1 --enabled true
+sentinel-license-service set-sync --id 1 --enabled false
 ```
 
 ## API
@@ -60,3 +60,29 @@ Two flags, each for a reason: `--strategy immediate` because this app mounts `se
 ## Status
 
 Deployed and live at `https://sentinel-license.fly.dev`. All three phases of the plan are complete: the standalone service (verified via curl/pytest), Command Center-side integration (the background check-in loop and health probe, gated behind `AUTH_PROVIDER=local` + `SENTINEL_LICENSE_KEY`), and the actual Sentinel-AI gate (enforced at every dispatch/API/MCP call site via `sentinel_blocked_by_license()`). Deferred: Stripe checkout automation — v1 issuance is manual/CLI-only (see above).
+
+
+## Implementation
+
+Rust (axum + sqlx), ported from the original Python/FastAPI service on
+2026-09-14. The wire contract did not change — Command Center's
+`license_client.py` and Sentinel-Sync-Service's entitlement check talk to
+this exactly as before, and `tests/wire_contract.rs` pins the behaviours
+they depend on, including that `/entitlements` writes nothing.
+
+The operator scripts moved into the binary as subcommands, so the image
+no longer carries a Python runtime to stay administrable:
+
+```bash
+fly ssh console -a sentinel-license -C "sentinel-license-service list"
+fly ssh console -a sentinel-license -C "sentinel-license-service show --key slk_..."
+```
+
+`scripts/backup_db.sh` and `restore_db.sh` are unchanged and still live at
+`/app/scripts` in the image, with `pg_dump`/`psql` installed — the nightly
+backup workflow shells into the machine and runs them.
+
+```bash
+cargo run                   # serves; needs DATABASE_URL
+cargo test                  # set TEST_DATABASE_URL for the wire-contract tests
+```

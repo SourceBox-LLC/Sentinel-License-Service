@@ -1,9 +1,10 @@
-.venv/
+/target
 __pycache__/
 *.pyc
 .env
+.env.*
+!.env.example
+# Local SQLite scratch from an unset DATABASE_URL. The Python service
+# defaulted to sqlite:///./licenses.db; never commit one — it can hold
+# real license rows.
 *.db
-*.db-wal
-*.db-shm
-.ruff_cache/
-.pytest_cache/
