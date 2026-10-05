@@ -109,9 +109,8 @@ jobs:
   deploy:
     name: Deploy to Fly.io
     runs-on: ubuntu-latest
-    # Waits on BOTH matrix legs (sqlite and postgres) — this service runs
-    # the same code against either dialect, so a green sqlite run alone
-    # is not evidence the deploy is safe.
+    # Waits on the test job, which runs against Postgres — the only
+    # database the Rust build speaks.
     needs: test
     # Push-only: a PR runs the tests above but never ships.
     if: github.event_name == 'push'

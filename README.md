@@ -4,15 +4,18 @@ Validates license keys for self-hosted Sentinel Command Center installs (`AUTH_P
 
 A genuinely separate service from Command Center — its own codebase, its own deploy target, its own database. Self-hosted operators' copy of Command Center never contains this service's code.
 
-The database is Postgres in production, on its own dedicated cluster `sentinel-postgres` (migrated from SQLite 2026-09-07). It falls back to SQLite when `DATABASE_URL` is unset, so a local run needs no database to set up — `app/core/database.py` branches on the URL scheme and CI runs the suite against both.
+The database is Postgres — in production its own database on the shared `sentinel-postgres` cluster. Postgres only: the SQLite fallback the Python service had did not survive the Rust port (the build enables only sqlx's `postgres` feature), so a local run needs a Postgres too. Migrations are embedded in the binary and applied at startup.
 
 ## Run locally
 
 ```bash
-cp .env.example .env   # defaults work as-is for local dev
-uv sync --extra dev
-uv run uvicorn app.main:app --reload
+docker run -d --name license-pg -e POSTGRES_USER=licensesvc -e POSTGRES_PASSWORD=licensesvc \
+  -e POSTGRES_DB=licenses -p 5432:5432 postgres:16-alpine
+
+cargo run                  # serves on :8000; DATABASE_URL defaults to that container
 ```
+
+Configuration is environment variables only — the binary does not read a `.env` file; `.env.example` lists what exists.
 
 ## Issue a license (v1: manual/CLI only, no self-serve checkout yet)
 
@@ -35,7 +38,7 @@ sentinel-license-service set-sync --id 1 --enabled false
 
 ## API
 
-`POST /v1/licenses/check-in` — `Authorization: Bearer slk_<key>`. Always returns HTTP 200 when the service itself is healthy, with `valid: bool` in the body — this is deliberate: it's how a caller tells "the service said no" (revoked/expired/suspended/unknown key — apply immediately) apart from "I couldn't reach it" (a real HTTP error — the caller should apply a grace period instead). See `app/api/licenses.py` for the full contract.
+`POST /v1/licenses/check-in` — `Authorization: Bearer slk_<key>`. Always returns HTTP 200 when the service itself is healthy, with `valid: bool` in the body — this is deliberate: it's how a caller tells "the service said no" (revoked/expired/suspended/unknown key — apply immediately) apart from "I couldn't reach it" (a real HTTP error — the caller should apply a grace period instead). See `src/api.rs` for the full contract.
 
 `GET /v1/licenses/entitlements` — `Authorization: Bearer slk_<key>`. Read-only entitlement lookup, deliberately separate from `/check-in`: it doesn't touch `last_seen_at` or write a check-in audit row, so a caller validating on every request (e.g. [Sentinel-Sync-Service](https://github.com/SourceBox-LLC/Sentinel-Sync-Service), checking every push) doesn't pollute that audit trail or fight Command Center's own check-in loop for rate-limit headroom. Returns `sync_enabled` — the cloud data-sync entitlement, a separate opt-in on the same license, independent of Sentinel-AI validity.
 
@@ -44,14 +47,16 @@ sentinel-license-service set-sync --id 1 --enabled false
 ## Tests
 
 ```bash
-uv run pytest
+TEST_DATABASE_URL=postgresql://licensesvc:licensesvc@localhost:5432/licenses cargo test
 ```
+
+The wire-contract tests skip without a database.
 
 ## Deploy
 
 Single-stage `Dockerfile` (no frontend build — this service has no UI). `fly.toml` targets a much smaller VM than Command Center's: 256 MB, no video workload, tiny check-in traffic.
 
-**Deploys from CI.** Every push to `master` runs the tests against both SQLite and Postgres, then `flyctl deploy`. Deploy automation was deferred while this was new infrastructure; that turned out worse than what it avoided, because `fly.toml` became a file that did nothing — a scale-to-zero change merged with CI fully green on 2026-09-09 and never reached Fly, and it *looked* applied because the commit was on master. Config that silently doesn't apply is more dangerous than no config.
+**Deploys from CI.** Every push to `master` runs the tests against Postgres, then `flyctl deploy`. Deploy automation was deferred while this was new infrastructure; that turned out worse than what it avoided, because `fly.toml` became a file that did nothing — a scale-to-zero change merged with CI fully green on 2026-09-09 and never reached Fly, and it *looked* applied because the commit was on master. Config that silently doesn't apply is more dangerous than no config.
 
 Two flags, each for a reason: `--strategy immediate` because this app mounts `sentinel_license_data` and the default rolling strategy errors on the volume's single attachment slot; `--ha=false` because Fly otherwise provisions two machines, which one volume can't serve anyway.
 
@@ -66,7 +71,7 @@ Deployed and live at `https://sentinel-license.fly.dev`. All three phases of the
 
 Rust (axum + sqlx), ported from the original Python/FastAPI service on
 2026-09-14. The wire contract did not change — Command Center's
-`license_client.py` and Sentinel-Sync-Service's entitlement check talk to
+`license.rs` and Sentinel-Sync-Service's entitlement check talk to
 this exactly as before, and `tests/wire_contract.rs` pins the behaviours
 they depend on, including that `/entitlements` writes nothing.
 
