@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use axum::{
+    middleware::from_fn,
     routing::{get, post},
     Json, Router,
 };
@@ -34,8 +35,16 @@ pub fn build_router(state: AppState) -> Router {
         .route("/", get(root))
         .route("/health", get(health))
         .route("/health/ready", get(health_ready))
-        .route("/v1/licenses/check-in", post(crate::api::check_in))
-        .route("/v1/licenses/entitlements", get(crate::api::entitlements))
+        .route(
+            "/v1/licenses/check-in",
+            post(crate::api::check_in).route_layer(from_fn(crate::ratelimit::per_minute::<20>)),
+        )
+        // Higher than check-in: its caller is Sync-Service validating
+        // pushes, not a 15-minute background loop.
+        .route(
+            "/v1/licenses/entitlements",
+            get(crate::api::entitlements).route_layer(from_fn(crate::ratelimit::per_minute::<60>)),
+        )
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         .with_state(state)
 }

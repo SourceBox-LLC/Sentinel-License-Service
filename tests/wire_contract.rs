@@ -404,3 +404,60 @@ async fn entitlements_writes_nothing() {
             .unwrap();
     assert!(seen.is_none(), "entitlements must not move last_seen_at");
 }
+
+/// The Python limited check-in to 20/min per client address; the port
+/// shipped without, so anyone could guess keys and grow the audit table
+/// without bound. The 21st request is a 429 in the Python's shape and
+/// writes nothing.
+#[tokio::test]
+async fn check_in_is_limited_per_client_address_and_the_refusal_writes_nothing() {
+    let st = st!();
+    let raw = "slk_ratelimit_probe_key";
+    sqlx::query("DELETE FROM license_checkins WHERE key_hash = $1")
+        .bind(hash_key(raw))
+        .execute(&st.pool)
+        .await
+        .unwrap();
+    let send = |ip: &'static str| {
+        let req = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/licenses/check-in")
+            .header("authorization", format!("Bearer {raw}"))
+            .header("fly-client-ip", ip)
+            // A spoofed X-Forwarded-For must not move the bucket.
+            .header("x-forwarded-for", format!("10.0.0.{}", rand_octet()))
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from("{}"))
+            .unwrap();
+        build_router(st.clone()).oneshot(req)
+    };
+    for _ in 0..20 {
+        assert_eq!(send("203.0.113.77").await.unwrap().status(), 200);
+    }
+    let refused = send("203.0.113.77").await.unwrap();
+    assert_eq!(refused.status(), 429);
+    assert_eq!(refused.headers()["retry-after"], "60");
+    let body: Value =
+        serde_json::from_slice(&refused.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(body["error"], "rate_limit_exceeded");
+
+    // Another address still gets through.
+    assert_eq!(send("203.0.113.78").await.unwrap().status(), 200);
+
+    let (rows,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM license_checkins WHERE key_hash = $1")
+            .bind(hash_key(raw))
+            .fetch_one(&st.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        rows, 21,
+        "20 admitted + 1 from the other address; the refusal wrote nothing"
+    );
+}
+
+fn rand_octet() -> u8 {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static N: AtomicU8 = AtomicU8::new(1);
+    N.fetch_add(1, Ordering::Relaxed)
+}

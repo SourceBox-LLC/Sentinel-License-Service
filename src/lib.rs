@@ -6,5 +6,6 @@ pub mod app;
 pub mod config;
 pub mod error;
 pub mod keys;
+pub mod ratelimit;
 
 pub use app::{build_router, AppState, VERSION};
