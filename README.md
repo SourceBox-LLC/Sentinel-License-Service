@@ -42,7 +42,9 @@ sentinel-license-service set-sync --id 1 --enabled false
 
 `GET /v1/licenses/entitlements` — `Authorization: Bearer slk_<key>`. Read-only entitlement lookup, deliberately separate from `/check-in`: it doesn't touch `last_seen_at` or write a check-in audit row, so a caller validating on every request (e.g. [Sentinel-Sync-Service](https://github.com/SourceBox-LLC/Sentinel-Sync-Service), checking every push) doesn't pollute that audit trail or fight Command Center's own check-in loop for rate-limit headroom. Returns `sync_enabled` — the cloud data-sync entitlement, a separate opt-in on the same license, independent of Sentinel-AI validity.
 
-`GET /health` — pure liveness. `GET /health/ready` — 503 if a critical dependency (database or disk) is down.
+`GET /health` — pure liveness. `GET /health/ready` — 503 if the database is unreachable.
+
+**Rate limits**, per client address (`Fly-Client-IP`, else the connection; `X-Forwarded-For` is ignored because a caller can forge it): 20/min on `/check-in`, 60/min on `/entitlements`. Past the limit: 429 with `Retry-After: 60`. The limit runs before the handler, so a refused check-in writes nothing. Command Center treats a 429 like any non-200, as "unreachable", and its 72-hour grace window applies.
 
 ## Tests
 
