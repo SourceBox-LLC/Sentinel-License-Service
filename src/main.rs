@@ -145,12 +145,17 @@ async fn serve(config: Config, pool: sqlx::PgPool) -> anyhow::Result<()> {
         "sentinel-license-service listening"
     );
 
-    axum::serve(listener, build_router(state))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-            tracing::info!("shutting down");
-        })
-        .await?;
+    // With connect info, so the rate limiter can fall back to the peer
+    // address when Fly-Client-IP is absent.
+    axum::serve(
+        listener,
+        build_router(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
+        let _ = tokio::signal::ctrl_c().await;
+        tracing::info!("shutting down");
+    })
+    .await?;
     Ok(())
 }
 
