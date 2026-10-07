@@ -115,13 +115,31 @@ jobs:
     # Push-only: a PR runs the tests above but never ships.
     if: github.event_name == 'push'
     # Serialize so two quick pushes don't race on the machine update.
+    # Queue rather than cancel, and deploy only if this commit is still
+    # master's head: with cancel-in-progress, whichever run *reached*
+    # this job last won, even an older commit (Command Center shipped its
+    # parent commit that way on 2026-10-07). An older run that comes up
+    # late now steps aside for the newer one.
     concurrency:
       group: deploy-sentinel-license
-      cancel-in-progress: true
+      cancel-in-progress: false
     steps:
+      - name: Deploy only the newest commit on master
+        id: newest
+        run: |
+          head=$(git ls-remote "https://github.com/${{ github.repository }}" refs/heads/master | cut -f1)
+          if [ "$head" = "${{ github.sha }}" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "master is at $head now; its own run deploys it. Skipping ${{ github.sha }}."
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v7
+        if: steps.newest.outputs.deploy == 'true'
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
+        if: steps.newest.outputs.deploy == 'true'
 
       # --strategy immediate because this app mounts a volume
       # (sentinel_license_data). The default rolling strategy tries to
@@ -134,6 +152,7 @@ jobs:
       # this service does not need and which the volume cannot serve
       # anyway.
       - name: flyctl deploy
+        if: steps.newest.outputs.deploy == 'true'
         run: flyctl deploy --remote-only --strategy immediate --ha=false --yes
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
