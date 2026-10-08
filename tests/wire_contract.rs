@@ -461,3 +461,77 @@ fn rand_octet() -> u8 {
     static N: AtomicU8 = AtomicU8::new(1);
     N.fetch_add(1, Ordering::Relaxed)
 }
+
+/// Check-ins for keys we don't recognise are kept for 30 days; check-ins
+/// for real licences are kept. Writing a new unknown-key check-in is
+/// what prunes the old ones.
+#[tokio::test]
+async fn old_unknown_key_checkins_are_pruned_but_real_ones_kept() {
+    let st = st!();
+    for key in ["slk_prune_unknown_old", "slk_prune_unknown_new"] {
+        sqlx::query("DELETE FROM license_checkins WHERE key_hash = $1")
+            .bind(hash_key(key))
+            .execute(&st.pool)
+            .await
+            .unwrap();
+    }
+    let real = seed(&st, "prune_real", "active", Some(30), false).await;
+    let old = chrono::Utc::now().naive_utc() - chrono::Duration::days(45);
+    let (license_id,): (i32,) = sqlx::query_as("SELECT id FROM licenses WHERE key_hash = $1")
+        .bind(hash_key(&real))
+        .fetch_one(&st.pool)
+        .await
+        .unwrap();
+    for (key, id) in [
+        ("slk_prune_unknown_old", None),
+        (real.as_str(), Some(license_id)),
+    ] {
+        sqlx::query(
+            "INSERT INTO license_checkins (key_hash, license_id, checked_in_at, result)
+             VALUES ($1, $2, $3, 'not_found')",
+        )
+        .bind(hash_key(key))
+        .bind(id)
+        .bind(old)
+        .execute(&st.pool)
+        .await
+        .unwrap();
+    }
+
+    call(
+        &st,
+        "POST",
+        "/v1/licenses/check-in",
+        Some("Bearer slk_prune_unknown_new"),
+        Some(json!({})),
+    )
+    .await;
+
+    let count = |key: String| {
+        let pool = st.pool.clone();
+        async move {
+            let (n,): (i64,) =
+                sqlx::query_as("SELECT COUNT(*) FROM license_checkins WHERE key_hash = $1")
+                    .bind(hash_key(&key))
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            n
+        }
+    };
+    assert_eq!(
+        count("slk_prune_unknown_old".into()).await,
+        0,
+        "45-day-old unknown row"
+    );
+    assert_eq!(
+        count("slk_prune_unknown_new".into()).await,
+        1,
+        "today's unknown row"
+    );
+    assert_eq!(
+        count(real.clone()).await,
+        1,
+        "a real licence's history is kept"
+    );
+}

@@ -305,7 +305,34 @@ async fn log_checkin(
     .bind(result)
     .execute(pool)
     .await?;
+    if license_id.is_none() {
+        prune_unknown_key_checkins(pool, now).await?;
+    }
     Ok(())
+}
+
+/// How long a check-in with a key we don't recognise is kept.
+pub const UNKNOWN_KEY_RETENTION_DAYS: i64 = 30;
+
+/// Delete check-ins for unknown keys older than the retention window.
+///
+/// Those rows (a mistyped key, a revoked install, someone guessing) hold
+/// an IP address and are tied to no licence, so nothing else ever
+/// removes them; the table grew for as long as anyone kept trying. The
+/// service sleeps when idle and has no background loop, so this runs
+/// whenever such a row is written, which is exactly when they arrive.
+/// Check-ins for real licences stay, as the Privacy Policy says.
+pub async fn prune_unknown_key_checkins(
+    pool: &sqlx::PgPool,
+    now: NaiveDateTime,
+) -> Result<u64, sqlx::Error> {
+    let cutoff = now - chrono::Duration::days(UNKNOWN_KEY_RETENTION_DAYS);
+    let res =
+        sqlx::query("DELETE FROM license_checkins WHERE license_id IS NULL AND checked_in_at < $1")
+            .bind(cutoff)
+            .execute(pool)
+            .await?;
+    Ok(res.rows_affected())
 }
 
 fn truncate(s: &str, max_chars: usize) -> String {
