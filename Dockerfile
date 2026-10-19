@@ -62,6 +62,13 @@ RUN useradd --system --uid 10001 --create-home --shell /usr/sbin/nologin license
 WORKDIR /app
 
 COPY --from=builder /build/target/release/sentinel-license-service /usr/local/bin/sentinel-license-service
+
+# The private CA that signed the production Postgres server certificate.
+# DATABASE_URL names it (`sslmode=verify-full&sslrootcert=…`), so the
+# connection is encrypted and refuses a server that is not
+# `sentinel-postgres`. Public by nature. Setup, checks and rotation:
+# "Connections use TLS" in Sentinel-Command's docs/runbooks/DISASTER_RECOVERY.md.
+COPY deploy/sentinel-postgres-ca.pem /etc/sentinel/sentinel-postgres-ca.pem
 # Kept at /app/scripts because backup.yml hard-codes that path.
 COPY scripts ./scripts
 RUN chmod +x ./scripts/*.sh
